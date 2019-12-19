@@ -1,10 +1,14 @@
+
 mod utils;
+
+#[macro_use]
+extern crate serde_derive;
 
 use wasm_bindgen::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
-use wasm_bindgen::JsCast;
-use web_sys::{WebGlProgram, WebGlRenderingContext, WebGlShader};
+use wasm_bindgen::{JsCast, JsValue};
+use web_sys::{WebGlProgram, WebGlRenderingContext, WebGlShader, WebGlUniformLocation, console};
 
 // When the `wee_alloc` feature is enabled, use `wee_alloc` as the global
 // allocator.
@@ -43,7 +47,7 @@ fn body() -> web_sys::HtmlElement {
 }
 
 
-const BUF_MAX_SZ : usize = 2000*2;
+const BUF_MAX_SZ : usize = 4000*2;
 static mut BUF : [f32; BUF_MAX_SZ] = [0f32;BUF_MAX_SZ];
 static mut BUF_SZ : usize = 0;
 static mut BUF_RD : usize = 0;
@@ -60,8 +64,28 @@ fn add_point(amp : f32) {
     }
 }
 
+fn move_plot(offset : isize) {
+    unsafe {
+        let mut j = 0;
+        for i in (0 .. BUF_SZ).step_by(2) {
+            BUF[i]   = j as f32;
+            BUF[i+1] = (i as f32 / 10. + (offset as f32)/2.).sin() * 50.0;
+            j += 2;
+        }
+    }
+}
+
 #[wasm_bindgen(start)]
 pub fn run() -> Result<(), JsValue> {
+    // Set panic output to js console
+    console_error_panic_hook::set_once();
+    // Setup logger
+    wasm_logger::init(wasm_logger::Config::default());
+    
+    let test = JsValue::from_str("MY js value");
+    log::info!("Some info {:?}", &test);
+    log::error!("Error message");
+
     let document = web_sys::window().unwrap().document().unwrap();
     let canvas = document.get_element_by_id("canvas").unwrap();
     let canvas: web_sys::HtmlCanvasElement = canvas.dyn_into::<web_sys::HtmlCanvasElement>()?;
@@ -75,11 +99,24 @@ pub fn run() -> Result<(), JsValue> {
     // Set buffer actual size
     unsafe { BUF_SZ = width as usize; }
 
+    // Context settings
+    #[derive(Serialize)]
+    struct CxtCfg {
+        antialias : bool,
+        depth     : bool,
+    };
+
+    let cxt_cfg = CxtCfg { antialias : false, depth : false };
+    let cxt_cfg = JsValue::from_serde(&cxt_cfg).unwrap();
+
     let context = canvas
-        .get_context("webgl")?
+        //.get_context("webgl")?
+        .get_context_with_context_options("webgl", &cxt_cfg)?
         .unwrap()
         .dyn_into::<WebGlRenderingContext>()?;
+        
 
+    // Shaders
     let vert_shader = compile_shader(
         &context,
         WebGlRenderingContext::VERTEX_SHADER,
@@ -98,13 +135,11 @@ pub fn run() -> Result<(), JsValue> {
           {
             Pos.x = mod(Pos.x,u_xmod.x);
           };
-          
 
           vec2 zeroToOne = Pos / u_resolution; // преобразуем положение в пикселях к диапазону от 0.0 до 1.0
        
           // преобразуем из 0->1 в 0->2
           vec2 zeroToTwo = zeroToOne * 2.0;
-       
           // преобразуем из 0->2 в -1->+1 (пространство отсечения)
           vec2 clipSpace = zeroToTwo - 1.0;
           vec2 clipSpaceN = clipSpace * vec2(1, -1); // переворачиваем систему коооординат (0,0) в левом верхнем углу
@@ -133,7 +168,6 @@ pub fn run() -> Result<(), JsValue> {
     let shift_location = context.get_uniform_location(&program, "u_shift");
     let xmod_location = context.get_uniform_location(&program, "u_xmod");
 
-
     let position_buffer = context.create_buffer().ok_or("failed to create buffer")?;
     context.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, Some(&position_buffer));
 
@@ -153,30 +187,37 @@ pub fn run() -> Result<(), JsValue> {
 
     let f = Rc::new(RefCell::new(None));
     let g = f.clone();
+    let mut cnt = 0;
 
     *g.borrow_mut() = Some(Closure::wrap(Box::new(move || {
+
+        move_plot(cnt);
+        cnt += 1;
 
         context.clear_color(1.0, 1.0, 1.0, 1.0);
         context.clear(WebGlRenderingContext::COLOR_BUFFER_BIT);
 
         unsafe {
-            let vert_array = js_sys::Float32Array::view(&BUF);
+            let vert_array = js_sys::Float32Array::view(&BUF[.. BUF_SZ]);
 
             context.buffer_data_with_array_buffer_view(
                 WebGlRenderingContext::ARRAY_BUFFER,
                 &vert_array,
-                WebGlRenderingContext::STATIC_DRAW,
+                WebGlRenderingContext::DYNAMIC_DRAW,
             );
         }
 
-        context.uniform2f(xmod_location.as_ref(), 0f32, 0f32);
+        draw_plot(&context, &xmod_location, &shift_location, 100.);
+        draw_plot(&context, &xmod_location, &shift_location, 200.);
+        draw_plot(&context, &xmod_location, &shift_location, 300.);
+        draw_plot(&context, &xmod_location, &shift_location, 400.);
+        draw_plot(&context, &xmod_location, &shift_location, 500.);
+        draw_plot(&context, &xmod_location, &shift_location, 600.);
+        draw_plot(&context, &xmod_location, &shift_location, 700.);
+        draw_plot(&context, &xmod_location, &shift_location, 800.);
+        draw_plot(&context, &xmod_location, &shift_location, 900.);
 
-        context.draw_arrays(
-            WebGlRenderingContext::LINE_STRIP,
-            0,
-            1000,
-        );
-
+        //context.finish();
 
         request_animation_frame(f.borrow().as_ref().unwrap());
     }) as Box<dyn FnMut()>));
@@ -184,6 +225,21 @@ pub fn run() -> Result<(), JsValue> {
     request_animation_frame(g.borrow().as_ref().unwrap());
 
     Ok(())
+}
+
+pub fn draw_plot(
+    context : &WebGlRenderingContext, 
+    xmod_location : &Option<WebGlUniformLocation>, 
+    shift_location : &Option<WebGlUniformLocation>,
+    shift_v : f32,
+    ) {
+    context.uniform2f(xmod_location.as_ref(), 0f32, 0f32);
+    context.uniform2f(shift_location.as_ref(), 0f32, shift_v);
+    context.draw_arrays(
+        WebGlRenderingContext::LINE_STRIP,
+        0,
+        unsafe{BUF_SZ as i32 / 2},
+    );
 }
 
 pub fn compile_shader(
