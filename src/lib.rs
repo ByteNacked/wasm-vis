@@ -46,12 +46,59 @@ fn body() -> web_sys::HtmlElement {
     document().body().expect("document should have a body")
 }
 
+fn perf_now() -> f64 {
+    window()
+        .performance()
+        .expect("window should have perfomance obj")
+        .now()
+}
 
 const BUF_MAX_SZ : usize = 4000*2;
 static mut BUF : [f32; BUF_MAX_SZ] = [0f32;BUF_MAX_SZ];
 static mut BUF_SZ : usize = 0;
 static mut BUF_RD : usize = 0;
 static mut BUF_I : usize  = 0;
+
+
+struct CBuf {
+    buf : [f32; BUF_MAX_SZ],
+    sz  : usize,
+    cursor : usize,
+}
+
+impl CBuf {
+    fn add_point_perf(&mut self, pos : f32, sample : f32) {
+        use core::ptr::copy;
+        unsafe { copy(&self.buf as *const f32, ((&mut self.buf[0]) as *mut f32).offset(2), self.sz - 2) }
+        
+        //for i in 2 .. self.sz {
+        //    self.buf[i] = self.buf[i-2];
+        //}
+
+        self.buf[0] = pos;
+        self.buf[1] = sample;
+    }
+}
+
+static mut PERF_BUF : CBuf = CBuf {
+    buf : [0f32;BUF_MAX_SZ],
+    sz  : 0,
+    cursor : 0,
+};
+
+fn get_perf_buf() -> &'static mut CBuf {
+    unsafe {&mut PERF_BUF}
+}
+
+static mut LAST_TIMING : f64 = 0f64;
+fn get_last_timing() -> &'static mut f64 {
+    unsafe { &mut LAST_TIMING }
+}
+
+fn set_last_timing(t : f64) {
+    unsafe { LAST_TIMING = t; }
+}
+
 
 fn add_point(amp : f32) {
     unsafe {
@@ -98,6 +145,7 @@ pub fn run() -> Result<(), JsValue> {
 
     // Set buffer actual size
     unsafe { BUF_SZ = width as usize; }
+    unsafe { PERF_BUF.sz = (width * 2)as usize; }
 
     // Context settings
     #[derive(Serialize)]
@@ -131,10 +179,15 @@ pub fn run() -> Result<(), JsValue> {
         {
           vec2 Pos = a_position + u_shift; 
           
-          if(u_xmod.x != 0.0 )
-          {
-            Pos.x = mod(Pos.x,u_xmod.x);
-          };
+          //if(u_xmod.x != 0.0 )
+          //{
+          //  Pos.x = mod(Pos.x,u_xmod.x);
+          //};
+          //
+
+          //Pos.x = mod(Pos.x, u_resolution.x);
+
+          Pos.x = abs(Pos.x);
 
           vec2 zeroToOne = Pos / u_resolution; // преобразуем положение в пикселях к диапазону от 0.0 до 1.0
        
@@ -171,15 +224,6 @@ pub fn run() -> Result<(), JsValue> {
     let position_buffer = context.create_buffer().ok_or("failed to create buffer")?;
     context.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, Some(&position_buffer));
 
-    // Note that `Float32Array::view` is somewhat dangerous (hence the
-    // `unsafe`!). This is creating a raw view into our module's
-    // `WebAssembly.Memory` buffer, but if we allocate more pages for ourself
-    // (aka do a memory allocation in Rust) it'll cause the buffer to change,
-    // causing the `Float32Array` to be invalid.
-    //
-    // As a result, after `Float32Array::view` we have to be very careful not to
-    // do any memory allocations before it's dropped.
-    
     context.enable_vertex_attrib_array(position_attribute_location as u32);
     context.vertex_attrib_pointer_with_i32(0, 2, WebGlRenderingContext::FLOAT, false, 0, 0);
     context.uniform2f(resolution_uniform_location.as_ref(), width as f32, height as f32);
@@ -191,40 +235,81 @@ pub fn run() -> Result<(), JsValue> {
 
     *g.borrow_mut() = Some(Closure::wrap(Box::new(move || {
 
-        move_plot(cnt);
+        //move_plot(cnt);
         cnt += 1;
+        let t1 = get_last_timing();
+        let t2 = perf_now();
+        let dt = t2 - *t1;
+        let x = t2 / 16.66667;
+        set_last_timing(t2);
+        
+        let offset = 1;
+        //let y = (x as f32 / 10. + (offset as f32)/2.).sin() * 50.0;
+        let y = dt as f32;
+        get_perf_buf().add_point_perf(x as f32, y);
+
+        //log::info!("frame : {} ms, pos: {}", dt, x);
+        //log::info!("buf sz : {:?}", &get_perf_buf().buf[.. get_perf_buf().sz]);
 
         context.clear_color(1.0, 1.0, 1.0, 1.0);
         context.clear(WebGlRenderingContext::COLOR_BUFFER_BIT);
 
-        unsafe {
-            let vert_array = js_sys::Float32Array::view(&BUF[.. BUF_SZ]);
-
-            context.buffer_data_with_array_buffer_view(
-                WebGlRenderingContext::ARRAY_BUFFER,
-                &vert_array,
-                WebGlRenderingContext::DYNAMIC_DRAW,
-            );
-        }
-
-        draw_plot(&context, &xmod_location, &shift_location, 100.);
-        draw_plot(&context, &xmod_location, &shift_location, 200.);
-        draw_plot(&context, &xmod_location, &shift_location, 300.);
-        draw_plot(&context, &xmod_location, &shift_location, 400.);
-        draw_plot(&context, &xmod_location, &shift_location, 500.);
-        draw_plot(&context, &xmod_location, &shift_location, 600.);
-        draw_plot(&context, &xmod_location, &shift_location, 700.);
-        draw_plot(&context, &xmod_location, &shift_location, 800.);
-        draw_plot(&context, &xmod_location, &shift_location, 900.);
+        draw_perf(&context, &xmod_location, &shift_location, -x as f32, 100.);
+        draw_perf(&context, &xmod_location, &shift_location, -x as f32, 200.);
+        draw_perf(&context, &xmod_location, &shift_location, -x as f32, 300.);
+        draw_perf(&context, &xmod_location, &shift_location, -x as f32, 400.);
+        draw_perf(&context, &xmod_location, &shift_location, -x as f32, 500.);
+        draw_perf(&context, &xmod_location, &shift_location, -x as f32, 600.);
+        draw_perf(&context, &xmod_location, &shift_location, -x as f32, 700.);
+        draw_perf(&context, &xmod_location, &shift_location, -x as f32, 800.);
+        draw_perf(&context, &xmod_location, &shift_location, -x as f32, 900.);
+        
+        //draw_plot(&context, &xmod_location, &shift_location, 100.);
+        //draw_plot(&context, &xmod_location, &shift_location, 200.);
+        //draw_plot(&context, &xmod_location, &shift_location, 300.);
+        //draw_plot(&context, &xmod_location, &shift_location, 400.);
+        //draw_plot(&context, &xmod_location, &shift_location, 500.);
+        //draw_plot(&context, &xmod_location, &shift_location, 600.);
+        //draw_plot(&context, &xmod_location, &shift_location, 700.);
+        //draw_plot(&context, &xmod_location, &shift_location, 800.);
+        //draw_plot(&context, &xmod_location, &shift_location, 900.);
 
         //context.finish();
 
         request_animation_frame(f.borrow().as_ref().unwrap());
     }) as Box<dyn FnMut()>));
-
+    
+    set_last_timing(perf_now());
     request_animation_frame(g.borrow().as_ref().unwrap());
 
     Ok(())
+}
+
+pub fn draw_perf(
+    context : &WebGlRenderingContext, 
+    xmod_location : &Option<WebGlUniformLocation>, 
+    shift_location : &Option<WebGlUniformLocation>,
+    shift_h : f32,
+    shift_v : f32,
+    ) {
+
+    unsafe {
+        let vert_array = js_sys::Float32Array::view(&PERF_BUF.buf[.. PERF_BUF.sz]);
+
+        context.buffer_data_with_array_buffer_view(
+            WebGlRenderingContext::ARRAY_BUFFER,
+            &vert_array,
+            WebGlRenderingContext::STREAM_DRAW,
+        );
+    }
+
+    context.uniform2f(xmod_location.as_ref(), 0f32, 0f32);
+    context.uniform2f(shift_location.as_ref(), shift_h, shift_v);
+    context.draw_arrays(
+        WebGlRenderingContext::LINE_STRIP,
+        0,
+        unsafe{PERF_BUF.sz as i32 / 2},
+    );
 }
 
 pub fn draw_plot(
@@ -233,6 +318,17 @@ pub fn draw_plot(
     shift_location : &Option<WebGlUniformLocation>,
     shift_v : f32,
     ) {
+
+    unsafe {
+        let vert_array = js_sys::Float32Array::view(&BUF[.. BUF_SZ]);
+
+        context.buffer_data_with_array_buffer_view(
+            WebGlRenderingContext::ARRAY_BUFFER,
+            &vert_array,
+            WebGlRenderingContext::STREAM_DRAW,
+        );
+    }
+
     context.uniform2f(xmod_location.as_ref(), 0f32, 0f32);
     context.uniform2f(shift_location.as_ref(), 0f32, shift_v);
     context.draw_arrays(
