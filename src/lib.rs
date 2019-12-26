@@ -122,6 +122,41 @@ fn move_plot(offset : isize) {
     }
 }
 
+
+fn gen_pack_unpack_8(delta : &[i32;8]) -> usize {
+    use core::mem::transmute_copy;
+    use delta::OutEnc;
+    use delta::ch8::decode_8;
+    use delta::ch8::encode_8;
+    use delta::common::*;
+
+    let mut bits_cnt= 0;
+    for i in 0 .. delta.len() {
+        let tmp = sample_size(delta[i]);
+        if  tmp > bits_cnt {
+            bits_cnt = tmp;
+        }
+    }
+    assert_ne!(bits_cnt, 0);
+
+    let mut out : OutEnc = [0;6];
+    let code = 0x0;
+
+    let sz = encode_8(&delta, bits_cnt as u8, code, &mut out);
+    let input : [u128;2] = unsafe { transmute_copy(&out) };
+
+    let mut decoded_delta = [0i32;8];
+    decode_8(&input, &mut decoded_delta).unwrap();
+
+    log::info!("packed with p{} : {:x?}", bits_cnt, &out[..]);
+    log::info!("in : {:x?}, out : {:x?}\n", &delta[..], &decoded_delta[..]);
+
+    assert_eq!(delta, &decoded_delta);
+
+    sz
+}
+
+
 #[wasm_bindgen(start)]
 pub fn run() -> Result<(), JsValue> {
     // Set panic output to js console
@@ -129,6 +164,10 @@ pub fn run() -> Result<(), JsValue> {
     // Setup logger
     wasm_logger::init(wasm_logger::Config::default());
     
+    
+    let delta = [3333i32; 8];
+    gen_pack_unpack_8(&delta);
+
     let test = JsValue::from_str("MY js value");
     log::info!("Some info {:?}", &test);
     log::error!("Error message");
